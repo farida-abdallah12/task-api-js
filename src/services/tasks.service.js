@@ -1,18 +1,12 @@
 // ===========================================================================
 // SERVICE LAYER — the business rules. Storage-agnostic and HTTP-agnostic.
 // ===========================================================================
-// This is where the *decisions* live: what makes input valid, how a new id is
-// chosen, what "not found" means. It never touches req/res (that's the route's
-// job) and never touches the tasks array (that's the repository's job) — it
-// just calls the repository and throws domain errors when a rule is broken.
-
 const repo = require('../repositories/tasks.repository');
 const { NotFoundError, ValidationError } = require('../errors');
 
-function listTasks({ done, search } = {}) {
-  let result = repo.findAll();
+async function listTasks({ done, search } = {}) {
+  let result = await repo.findAll();
 
-  // Extra: filter by done=true / done=false
   if (done !== undefined) {
     if (done !== 'true' && done !== 'false') {
       throw new ValidationError('done must be true or false');
@@ -21,7 +15,6 @@ function listTasks({ done, search } = {}) {
     result = result.filter((t) => t.done === wantDone);
   }
 
-  // Extra: search titles
   if (search !== undefined) {
     const word = String(search).trim();
     if (word === '') {
@@ -34,15 +27,15 @@ function listTasks({ done, search } = {}) {
   return result;
 }
 
-function getTask(id) {
-  const task = repo.findById(id);
+async function getTask(id) {
+  const task = await repo.findById(id);
   if (!task) {
     throw new NotFoundError(`Task ${id} not found`);
   }
   return task;
 }
 
-function createTask(body = {}) {
+async function createTask(body = {}) {
   const { title } = body;
   if (title === undefined || title === null || String(title).trim() === '') {
     throw new ValidationError('title is required and cannot be empty');
@@ -50,7 +43,7 @@ function createTask(body = {}) {
   return repo.create({ title: String(title).trim(), done: false });
 }
 
-function updateTask(id, body = {}) {
+async function updateTask(id, body = {}) {
   const hasTitle = Object.prototype.hasOwnProperty.call(body, 'title');
   const hasDone = Object.prototype.hasOwnProperty.call(body, 'done');
 
@@ -74,27 +67,27 @@ function updateTask(id, body = {}) {
     changes.done = body.done;
   }
 
-  const updated = repo.update(id, changes);
+  const updated = await repo.update(id, changes);
   if (!updated) {
     throw new NotFoundError(`Task ${id} not found`);
   }
   return updated;
 }
 
-function deleteTask(id) {
-  const removed = repo.remove(id);
+async function deleteTask(id) {
+  const removed = await repo.remove(id);
   if (!removed) {
     throw new NotFoundError(`Task ${id} not found`);
   }
 }
 
-function getStats() {
-  const all = repo.findAll();
+async function getStats() {
+  const all = await repo.findAll();
   const done = all.filter((t) => t.done).length;
   return { total: all.length, done, open: all.length - done };
 }
 
-function resetTasks() {
+async function resetTasks() {
   return repo.reset();
 }
 

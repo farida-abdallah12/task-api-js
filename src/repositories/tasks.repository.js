@@ -1,87 +1,83 @@
 // ===========================================================================
 // REPOSITORY LAYER — the ONLY file that knows *where* tasks are stored.
 // ===========================================================================
-// Now backed by a real SQLite database (tasks.db) instead of an in-memory list.
-// The routes and the service NEVER change, because they only ever call
-// findAll / findById / create / update / remove — they don't care what's behind them.
+// Now backed by a real PostgreSQL database running in Docker, instead of
+// SQLite. The routes and the service still only ever call
+// findAll / findById / create / update / remove — they don't care what's
+// behind them. The one unavoidable change: since Postgres talks over a
+// network, every call here is now asynchronous (returns a Promise).
 
-const Database = require('better-sqlite3');
-const path = require('path');
+const { Pool } = require('pg');
 
-// Opens tasks.db if it exists, or creates it if it doesn't — either way, `db`
-// is now a live connection to that file.
-const db = new Database(path.join(__dirname, '..', '..', 'tasks.db'));
+// Reads DATABASE_URL from .env (loaded via `node --env-file=.env` or dotenv
+// in index.js) and creates a pool of reusable connections to Postgres.
+const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
-// Create the table if it doesn't already exist. Runs every time the app
-// starts, but "IF NOT EXISTS" makes it a no-op after the first run.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0
-  )
-`);
+// Create the table if it doesn't already exist. Runs on startup — an
+// immediately-invoked async function since top-level await needs care.
+async function init() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL,
+      done BOOLEAN NOT NULL DEFAULT false
+    )
+  `);
 
-// Seed 3 example tasks — but only if the table is currently empty.
-const row = db.prepare('SELECT COUNT(*) AS count FROM tasks').get();
-if (row.count === 0) {
-  const insertSeed = db.prepare('INSERT INTO tasks (title, done) VALUES (?, ?)');
-  insertSeed.run('Buy groceries', 0);
-  insertSeed.run('Walk the dog', 1);
-  insertSeed.run('Read a book', 0);
+  const { rows } = await pool.query('SELECT COUNT(*) AS count FROM tasks');
+  if (Number(rows[0].count) === 0) {
+    await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Buy groceries', false]);
+    await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Walk the dog', true]);
+    await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Read a book', false]);
+  }
 }
 
-// SQLite stores booleans as 0/1 — this converts a raw row into the same
-// shape the rest of the app already expects (a real true/false).
-function toTaskShape(row) {
-  return { id: row.id, title: row.title, done: Boolean(row.done) };
+// Postgres already gives us real booleans (unlike SQLite's 0/1), so no
+// conversion helper is needed this time — rows come back in the right shape.
+
+async function findAll() {
+  const { rows } = await pool.query('SELECT * FROM tasks ORDER BY id');
+  return rows;
 }
 
-function findAll() {
-  const rows = db.prepare('SELECT * FROM tasks').all();
-  return rows.map(toTaskShape);
+async function findById(id) {
+  const { rows } = await pool.query('SELECT * FROM tasks WHERE id = $1', [id]);
+  return rows[0] || null;
 }
 
-function findById(id) {
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
-  return row ? toTaskShape(row) : null;
+async function create({ title, done }) {
+  const { rows } = await pool.query(
+    'INSERT INTO tasks (title, done) VALUES ($1, $2) RETURNING *',
+    [title, done ?? false]
+  );
+  return rows[0];
 }
 
-function create({ title, done }) {
-  const result = db
-    .prepare('INSERT INTO tasks (title, done) VALUES (?, ?)')
-    .run(title, done ? 1 : 0);
-  return findById(result.lastInsertRowid);
-}
-
-function update(id, changes) {
-  const existing = findById(id);
+async function update(id, changes) {
+  const existing = await findById(id);
   if (!existing) return null;
 
   const title = changes.title !== undefined ? changes.title : existing.title;
   const done = changes.done !== undefined ? changes.done : existing.done;
 
-  db.prepare('UPDATE tasks SET title = ?, done = ? WHERE id = ?').run(
-    title,
-    done ? 1 : 0,
-    id
+  const { rows } = await pool.query(
+    'UPDATE tasks SET title = $1, done = $2 WHERE id = $3 RETURNING *',
+    [title, done, id]
   );
-
-  return findById(id);
+  return rows[0];
 }
 
-function remove(id) {
-  const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
-  return result.changes > 0;
+async function remove(id) {
+  const result = await pool.query('DELETE FROM tasks WHERE id = $1', [id]);
+  return result.rowCount > 0;
 }
 
-function reset() {
-  db.exec('DELETE FROM tasks');
-  const insertSeed = db.prepare('INSERT INTO tasks (title, done) VALUES (?, ?)');
-  insertSeed.run('Buy groceries', 0);
-  insertSeed.run('Walk the dog', 1);
-  insertSeed.run('Read a book', 0);
+async function reset() {
+  await pool.query('DELETE FROM tasks');
+  await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Buy groceries', false]);
+  await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Walk the dog', true]);
+  await pool.query('INSERT INTO tasks (title, done) VALUES ($1, $2)', ['Read a book', false]);
   return findAll();
 }
 
-module.exports = { findAll, findById, create, update, remove, reset };
+module.exports = { init, findAll, findById, create, update, remove, reset };
