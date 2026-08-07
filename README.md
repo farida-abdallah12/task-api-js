@@ -1,21 +1,34 @@
-# Task API — layered version, now backed by SQLite
+# Task API — layered, containerized, backed by Postgres
 
-This CRUD API started as a single 176-line `index.js` in Assignment 1, refactored
-into **three layers** so each file has one job. Assignment 2 swapped the storage
-layer from an in-memory array to a real **SQLite** database (`tasks.db`) — every
-endpoint, status code, and validation rule behaves exactly as before, but data
-now survives a server restart.
+This CRUD API started as a single 176-line `index.js` in Assignment 1, was
+refactored into **three layers** so each file has one job, then moved through
+two storage swaps: an in-memory array (A1) → SQLite (A2) → a real **PostgreSQL**
+database running in Docker (this version). Every endpoint, status code, and
+validation rule has stayed identical across all three — only the storage layer
+underneath has ever changed.
 
 ## Run it
 
+**Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+
 ```bash
-npm install
-npm start          # http://localhost:3000  ·  docs at /docs
+cp .env.example .env
+docker compose up
 ```
 
-On first run, `tasks.db` is created automatically, the `tasks` table is created
-if missing, and 3 example tasks are seeded — but only if the table is empty, so
-restarting never duplicates them.
+That's it — one command builds your app's image, starts a Postgres container
+with a persistent volume, waits for the database to be ready, then starts the
+API at `http://localhost:3000` (docs at `/docs`).
+
+On first run, the `tasks` table is created automatically and 3 example tasks
+are seeded — but only if the table is empty, so restarting never duplicates them.
+
+### Environment variables
+
+Copy `.env.example` to `.env` before running. Inside Docker Compose, the app
+reaches the database by its service name (`db`), not `localhost` — this is
+already set correctly in `compose.yaml`; `.env` is only used if you run the
+app directly on your machine outside of Docker.
 
 ## Endpoints
 
@@ -34,7 +47,7 @@ restarting never duplicates them.
 ## Example request
 
 ```bash
-curl.exe -i -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
+curl -i -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
 ```
 
 Response:
@@ -51,54 +64,66 @@ Client
 │ HTTP request
 ▼
 src/routes/ ← HTTP layer: read the request, call a service, send the response
-│ plain function calls (ids, bodies)
+│
 ▼
 src/services/ ← business rules: validation, id generation, "not found" logic
-│ findAll / findById / create / update / remove
+│
 ▼
 src/repositories/ ← data access: the ONLY file that knows where tasks are stored
 │
 ▼
-Storage (in-memory in A1 → SQLite now → Postgres in A3)
+Storage (in-memory in A1 → SQLite in A2 → Postgres now)
 
 
-| File | Job | Knows about… |
-|---|---|---|
-| `src/routes/tasks.routes.js` | Translate HTTP ↔ service calls | `req` / `res`, status codes |
-| `src/services/tasks.service.js` | The business rules | validation, id rules — **not** HTTP, **not** storage |
-| `src/repositories/tasks.repository.js` | Store & fetch tasks | the data store only |
-| `src/middleware/error-handler.js` | Map thrown errors → status codes | `ValidationError`→400, `NotFoundError`→404 |
-| `src/errors.js` | Domain error types | nothing about HTTP |
-| `src/app.js` | Wire everything into Express | the pieces, not their internals |
-| `index.js` | Start the server | just the port |
+Moving from SQLite to Postgres required rewriting exactly one file,
+`tasks.repository.js` (plus adding `async`/`await` through the service and
+routes, since Postgres talks over a network instead of reading a local file).
+The actual business rules and HTTP handling never changed.
 
-## Why this matters
+## Containers
 
-**Separation of concerns.** Each layer changes for one reason. HTTP details change → only the routes. A business rule changes → only the service. **Storage changes → only the repository.**
+**Why Docker:** instead of installing Postgres directly and fighting OS-specific
+setup, Postgres runs as a container — a ready-made, isolated box that behaves
+identically on any machine. `docker compose up` starts both the app and the
+database together, already able to talk to each other.
 
-Assignment 2 proved this directly: moving from an in-memory array to SQLite required rewriting exactly one file, `tasks.repository.js`. The routes and the service — the API contract clients depend on — never changed at all.
+**The stack:**
+- `api` — this Node/Express app, built from the project's `Dockerfile`
+- `db` — the official `postgres` image, with a named volume (`taskdata`) so
+  data survives even if the containers are destroyed and recreated
+
+**Persistence proven:** created a task, ran `docker compose down` (which fully
+removes both containers) followed by `docker compose up` — the task was still
+there afterward, because the volume kept the data independent of the containers.
 
 ## Database
-
-**Why SQLite:** a single file, zero setup, no separate server to install or run — ideal for a small project, and it gives real persistence.
-
-**Where it lives:** `tasks.db`, in the project root, created automatically on first run. It's git-ignored, so every fresh clone starts with a clean database rather than someone else's data.
 
 **Schema:**
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  id SERIAL PRIMARY KEY,
   title TEXT NOT NULL,
-  done INTEGER NOT NULL DEFAULT 0
+  done BOOLEAN NOT NULL DEFAULT false
 );
 ```
 
-**Viewing the database:** I used [DB Browser for SQLite](https://sqlitebrowser.org/) to inspect and manually query `tasks.db`.
-
-![DB Browser showing the tasks table](screenshots/db-browser-tasks.png)
-
-**Example query I ran directly in DB Browser:**
-```sql
-UPDATE tasks SET done = 1;
+**Viewing the database directly**, bypassing the API entirely:
+```bash
+docker exec -it taskdb psql -U postgres -d tasks -c "SELECT * FROM tasks;"
 ```
-This marked every task as completed. After clicking "Write Changes," calling `GET /tasks` on the running API immediately reflected the change — no restart needed, since the API and DB Browser read the same file live.
+
+id | title | done
+----+---------------+------
+1 | Buy groceries | f
+2 | Walk the dog | t
+3 | Read a book | f
+
+
+![Postgres data via psql](screenshots/postgres-psql.png)
+
+## Notes on secrets
+
+The real `DATABASE_URL` (with the database password) lives in `.env`, which is
+git-ignored and never committed. `.env.example` is committed instead, with the
+same keys but placeholder values, so anyone cloning this repo knows what to set.
+What to do
