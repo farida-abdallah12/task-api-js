@@ -1,129 +1,142 @@
-# Task API — layered, containerized, backed by Postgres
+markdown
+# Task API — CRUD + Auth (JavaScript / Express)
 
-This CRUD API started as a single 176-line `index.js` in Assignment 1, was
-refactored into **three layers** so each file has one job, then moved through
-two storage swaps: an in-memory array (A1) → SQLite (A2) → a real **PostgreSQL**
-database running in Docker (this version). Every endpoint, status code, and
-validation rule has stayed identical across all three — only the storage layer
-underneath has ever changed.
+A task management REST API built as part of the FlyRank Backend AI Engineering internship. Started as an in-memory CRUD API (A1), moved to SQLite with a layered architecture (A2), migrated to a containerized PostgreSQL database (A3), and now secured with Supabase-based authentication (A4).
 
-## Run it
+Tasks are stored in PostgreSQL. User accounts, login, and JWT verification are handled by [Supabase Auth](https://supabase.com/auth) — this app never stores or hashes passwords itself.
 
-**Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running.
+## Tech stack
 
+- Node.js + Express
+- PostgreSQL (via Docker)
+- Supabase Auth (`@supabase/supabase-js`)
+- Swagger UI (`swagger-ui-express`) for interactive API docs
+
+## Setup
+
+1. Clone the repo:
 ```bash
-cp .env.example .env
-docker compose up
+   git clone https://github.com/farida-abdallah12/task-api-js.git
+   cd task-api-js
 ```
 
-That's it — one command builds your app's image, starts a Postgres container
-with a persistent volume, waits for the database to be ready, then starts the
-API at `http://localhost:3000` (docs at `/docs`).
+2. Install dependencies:
+```bash
+   npm install
+```
 
-On first run, the `tasks` table is created automatically and 3 example tasks
-are seeded — but only if the table is empty, so restarting never duplicates them.
+3. Copy the example environment file and fill in your own values:
+```bash
+   cp .env.example .env
+```
 
-### Environment variables
+   You'll need a free [Supabase](https://supabase.com) project. From your project's **Settings → API**, copy your **Project URL** and **Publishable key** into `.env`:
 
-Copy `.env.example` to `.env` before running. Inside Docker Compose, the app
-reaches the database by its service name (`db`), not `localhost` — this is
-already set correctly in `compose.yaml`; `.env` is only used if you run the
-app directly on your machine outside of Docker.
+```dotenv
+   DATABASE_URL=postgres://postgres:dev@localhost:5432/tasks
+   SUPABASE_URL=https://your-project-id.supabase.co
+   SUPABASE_KEY=your_supabase_publishable_key
+   PORT=3000
+```
 
-## Endpoints
+   In your Supabase dashboard, under **Authentication → Providers → Email**, turn **"Confirm email" off** for local testing, so new signups can log in immediately.
 
-| Method | Path          | Description               |
-|--------|---------------|----------------------------|
-| GET    | `/`           | API info                   |
-| GET    | `/health`     | Health check                |
-| GET    | `/tasks`      | List all tasks              |
-| GET    | `/tasks/{id}` | Get a single task by id      |
-| POST   | `/tasks`      | Create a new task            |
-| PUT    | `/tasks/{id}` | Update a task's title and/or done |
-| DELETE | `/tasks/{id}` | Delete a task                |
-| GET    | `/stats`      | Task counts (total/done/open) |
-| POST   | `/reset`      | Restore the 3 seed tasks     |
+## Running the app
+
+Start PostgreSQL in Docker:
+
+```bash
+docker compose up -d db
+```
+
+Then run the app locally:
+
+```bash
+npm start
+```
+
+You should see:
+
+CRUD API listening on port 3000
+Server running and connected to Supabase
+
+
+The API is now available at `http://localhost:3000`, and interactive docs at `http://localhost:3000/docs`.
+
+## API reference
+
+| Method | Route | Auth required | Description |
+|---|---|---|---|
+| POST | `/auth/signup` | No | Create a new user account |
+| POST | `/auth/login` | No | Authenticate and receive a JWT |
+| POST | `/auth/logout` | Yes (Bearer token) | End the current session |
+| GET | `/public/info` | No | Public, unprotected data |
+| GET | `/protected/profile` | Yes (Bearer token) | Get the logged-in user's profile |
+| GET | `/protected/dashboard` | Yes (Bearer token) | Example second protected route (same guard) |
+| GET | `/tasks` | No | List tasks |
+| POST | `/tasks` | No | Create a task |
+| GET | `/tasks/:id` | No | Get a single task |
+| PUT | `/tasks/:id` | No | Update a task |
+| DELETE | `/tasks/:id` | No | Delete a task |
+| GET | `/stats` | No | Task counts summary |
+| POST | `/reset` | No | Reset tasks to seed data |
+
+Protected routes require an `Authorization: Bearer <access_token>` header, using the token returned from `/auth/login`.
 
 ## Example request
 
+Sign up:
 ```bash
-curl -i -X POST http://localhost:3000/tasks -H "Content-Type: application/json" -d '{"title":"Buy milk"}'
+curl -i -X POST http://localhost:3000/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}'
 ```
 
-Response:
-
-HTTP/1.1 201 Created
-content-type: application/json
-
-{"id":5,"title":"Buy milk","done":false}
-
-
-## The layers
-
-Client
-│ HTTP request
-▼
-src/routes/ ← HTTP layer: read the request, call a service, send the response
-│
-▼
-src/services/ ← business rules: validation, id generation, "not found" logic
-│
-▼
-src/repositories/ ← data access: the ONLY file that knows where tasks are stored
-│
-▼
-Storage (in-memory in A1 → SQLite in A2 → Postgres now)
-
-
-Moving from SQLite to Postgres required rewriting exactly one file,
-`tasks.repository.js` (plus adding `async`/`await` through the service and
-routes, since Postgres talks over a network instead of reading a local file).
-The actual business rules and HTTP handling never changed.
-
-## Containers
-
-**Why Docker:** instead of installing Postgres directly and fighting OS-specific
-setup, Postgres runs as a container — a ready-made, isolated box that behaves
-identically on any machine. `docker compose up` starts both the app and the
-database together, already able to talk to each other.
-
-**The stack:**
-- `api` — this Node/Express app, built from the project's `Dockerfile`
-- `db` — the official `postgres` image, with a named volume (`taskdata`) so
-  data survives even if the containers are destroyed and recreated
-
-**Persistence proven:** created a task, ran `docker compose down` (which fully
-removes both containers) followed by `docker compose up` — the task was still
-there afterward, because the volume kept the data independent of the containers.
-
-## Database
-
-**Schema:**
-```sql
-CREATE TABLE IF NOT EXISTS tasks (
-  id SERIAL PRIMARY KEY,
-  title TEXT NOT NULL,
-  done BOOLEAN NOT NULL DEFAULT false
-);
-```
-
-**Viewing the database directly**, bypassing the API entirely:
+Log in:
 ```bash
-docker exec -it taskdb psql -U postgres -d tasks -c "SELECT * FROM tasks;"
+curl -i -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}'
 ```
 
-id | title | done
-----+---------------+------
-1 | Buy groceries | f
-2 | Walk the dog | t
-3 | Read a book | f
+Access a protected route:
+```bash
+curl -i http://localhost:3000/protected/profile \
+  -H "Authorization: Bearer <your_access_token>"
+```
+
+## Swagger UI
+
+Interactive docs, including a bearer-token "Authorize" flow, are available at `/docs` once the server is running.
+
+![Swagger UI showing the protected profile route with a successful authorized response](./screenshots/swagger-protected-profile.png)
+
+## Project structure
+
+src/
+config/
+supabaseClient.js # Supabase client initialization
+middleware/
+auth.middleware.js # Bearer token verification (reusable guard)
+error-handler.js # Central error → HTTP status mapping
+repositories/
+tasks.repository.js # Postgres queries for tasks
+routes/
+auth.routes.js # /auth, /public, /protected routes
+meta.routes.js
+tasks.routes.js
+services/
+auth.service.js # Supabase signup/login/logout/verify logic
+tasks.service.js
+app.js # Express app wiring
+errors.js # Domain error classes
+index.js # Entry point
+compose.yaml
+Dockerfile
 
 
-![Postgres data via psql](screenshots/postgres-psql.png)
+## Notes
 
-## Notes on secrets
-
-The real `DATABASE_URL` (with the database password) lives in `.env`, which is
-git-ignored and never committed. `.env.example` is committed instead, with the
-same keys but placeholder values, so anyone cloning this repo knows what to set.
-What to do
+- Passwords are never stored or hashed by this application — Supabase Auth handles that entirely.
+- The `anon`/publishable Supabase key is used in this app; the `service_role`/secret key is never used and must stay private.
+- `.env` is git-ignored; use `.env.example` as a template.
