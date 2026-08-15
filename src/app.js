@@ -8,6 +8,7 @@ const openapi = require('../openapi.json');
 const metaRoutes = require('./routes/meta.routes');
 const tasksRoutes = require('./routes/tasks.routes');
 const { errorHandler } = require('./middleware/error-handler');
+const authRoutes = require('./routes/auth.routes');
 
 function createApp() {
   const app = express();
@@ -22,6 +23,7 @@ function createApp() {
   // calls a service, and formats the response.
   app.use('/', metaRoutes);
   app.use('/', tasksRoutes);
+  app.use('/', authRoutes);
 
   // One place that turns thrown errors into HTTP status codes. Must be last.
   app.use(errorHandler);
