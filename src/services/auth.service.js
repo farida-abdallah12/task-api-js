@@ -39,4 +39,12 @@ async function getProfile(token) {
   };
 }
 
-module.exports = { signup, login, getProfile };
+async function logout(token) {
+  const { error } = await supabase.auth.signOut(token);
+
+  if (error) {
+    throw new UnauthorizedError('Failed to sign out');
+  }
+}
+
+module.exports = { signup, login, getProfile, logout };

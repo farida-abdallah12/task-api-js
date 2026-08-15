@@ -1,5 +1,6 @@
 const express = require('express');
 const service = require('../services/auth.service');
+const { requireAuth } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
@@ -33,29 +34,25 @@ router.post('/auth/login', async (req, res, next) => {
   }
 });
 
+router.post('/auth/logout', requireAuth, async (req, res, next) => {
+  try {
+    await service.logout(req.token);
+    res.status(204).send();
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/public/info', (req, res) => {
   res.status(200).json({ message: 'Welcome stranger! This info is public.' });
 });
 
-router.get('/protected/profile', async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
+router.get('/protected/profile', requireAuth, (req, res) => {
+  res.status(200).json(req.user);
+});
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Access token required' });
-    }
-
-    const token = authHeader.split(' ')[1];
-
-    if (!token) {
-      return res.status(401).json({ error: 'Access token required' });
-    }
-
-    const profile = await service.getProfile(token);
-    res.status(200).json(profile);
-  } catch (err) {
-    next(err);
-  }
+router.get('/protected/dashboard', requireAuth, (req, res) => {
+  res.status(200).json({ message: `Welcome to your dashboard, ${req.user.email}` });
 });
 
 module.exports = router;
