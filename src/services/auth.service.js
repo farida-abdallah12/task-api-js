@@ -24,4 +24,19 @@ async function login(email, password) {
   };
 }
 
-module.exports = { signup, login };
+async function getProfile(token) {
+  const { data, error } = await supabase.auth.getUser(token);
+
+  if (error) {
+    throw new UnauthorizedError('Invalid or expired token');
+  }
+
+  const user = data.user;
+  return {
+    id: user.id,
+    email: user.email,
+    created_at: user.created_at,
+  };
+}
+
+module.exports = { signup, login, getProfile };
