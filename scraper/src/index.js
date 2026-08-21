@@ -8,6 +8,25 @@ const USER_AGENT = 'FlyRankInternshipA9/1.0 (+https://github.com/farida-abdallah
 const TIMEOUT_MS = 5000;
 const DELAY_MS = 500;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchOnce(url) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      headers: { 'User-Agent': USER_AGENT },
+      signal: controller.signal,
+    });
+    return response;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 async function fetchWithCache(url, cachePath) {
   if (existsSync(cachePath)) {
     const cached = await readFile(cachePath, 'utf-8');
@@ -15,17 +34,27 @@ async function fetchWithCache(url, cachePath) {
     return { html: cached, fromCache: true };
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
   let response;
+
   try {
-    response = await fetch(url, {
-      headers: { 'User-Agent': USER_AGENT },
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
+    response = await fetchOnce(url);
+  } catch (err) {
+    // A timeout/network error throws here — worth one retry
+    console.log(`RETRY (after error: ${err.message}) — ${url}`);
+    await sleep(1000);
+    response = await fetchOnce(url);
+  }
+
+  if (response.status === 404 || response.status === 403) {
+    // Never retry — the page doesn't exist, or the site said no
+    throw new Error(`Fetch failed for ${url} — status ${response.status} (not retrying)`);
+  }
+
+  if (response.status >= 500) {
+    // Server-side error — worth one retry
+    console.log(`RETRY (status ${response.status}) — ${url}`);
+    await sleep(1000);
+    response = await fetchOnce(url);
   }
 
   if (response.status !== 200) {
@@ -115,11 +144,6 @@ function normalizeRecord(raw) {
   };
 }
 
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 // Turns a book URL into a safe, unique cache filename
 function cacheFilenameForUrl(url) {
   const slug = new URL(url).pathname
@@ -159,37 +183,47 @@ function validateRecords(rawRecords) {
 }
 
 async function main() {
+  const startTime = new Date();
   await mkdir('cache', { recursive: true });
+
+  let pagesFetched = 0;
+  let cacheHits = 0;
+  const failedPages = [];
 
   // --- Stage 2: discover catalogue pages and book links ---
   let currentUrl = 'https://books.toscrape.com/catalogue/page-1.html';
   let pageNumber = 1;
   let allLinks = [];
-  const linkSourcePage = new Map(); // bookUrl -> which catalogue page it came from
+  const linkSourcePage = new Map();
 
   while (currentUrl) {
     const cachePath = path.join('cache', `catalogue-page-${pageNumber}.html`);
-    const { html, fromCache } = await fetchWithCache(currentUrl, cachePath);
 
-    const linksOnThisPage = extractBookLinks(html, currentUrl);
-    for (const link of linksOnThisPage) {
-      linkSourcePage.set(link, currentUrl);
+    try {
+      const { html, fromCache } = await fetchWithCache(currentUrl, cachePath);
+      fromCache ? cacheHits++ : pagesFetched++;
+
+      const linksOnThisPage = extractBookLinks(html, currentUrl);
+      for (const link of linksOnThisPage) {
+        linkSourcePage.set(link, currentUrl);
+      }
+      allLinks = allLinks.concat(linksOnThisPage);
+
+      const nextUrl = findNextPageUrl(html, currentUrl);
+      if (!fromCache && nextUrl) await sleep(DELAY_MS);
+      currentUrl = nextUrl;
+    } catch (err) {
+      console.log(`FAILED (catalogue page) — ${currentUrl}: ${err.message}`);
+      failedPages.push({ url: currentUrl, reason: err.message });
+      currentUrl = null; // can't discover further pages if this one failed
     }
-    allLinks = allLinks.concat(linksOnThisPage);
 
-    const nextUrl = findNextPageUrl(html, currentUrl);
-
-    if (!fromCache && nextUrl) {
-      await sleep(DELAY_MS);
-    }
-
-    currentUrl = nextUrl;
     pageNumber += 1;
-
     if (pageNumber > 3) break;
   }
 
   const uniqueLinks = [...new Set(allLinks)];
+
   console.log(`catalogue_pages=${pageNumber - 1}`);
   console.log(`discovered=${allLinks.length}`);
   console.log(`unique_urls=${uniqueLinks.length}`);
@@ -199,24 +233,46 @@ async function main() {
 
   for (const bookUrl of uniqueLinks) {
     const cachePath = path.join('cache', cacheFilenameForUrl(bookUrl));
-    const { html, fromCache } = await fetchWithCache(bookUrl, cachePath);
 
-    const record = extractBookDetails(html, bookUrl, linkSourcePage.get(bookUrl));
-    records.push(record);
+    try {
+      const { html, fromCache } = await fetchWithCache(bookUrl, cachePath);
+      fromCache ? cacheHits++ : pagesFetched++;
 
-    if (!fromCache) {
-      await sleep(DELAY_MS);
+      const record = extractBookDetails(html, bookUrl, linkSourcePage.get(bookUrl));
+      records.push(record);
+
+      if (!fromCache) await sleep(DELAY_MS);
+    } catch (err) {
+      console.log(`FAILED (detail page) — ${bookUrl}: ${err.message}`);
+      failedPages.push({ url: bookUrl, reason: err.message });
     }
   }
 
+  // --- Stage 4: normalize, validate, store ---
   const { valid, errors } = validateRecords(records);
 
   await mkdir('output', { recursive: true });
   await writeFile('output/books.json', JSON.stringify(valid, null, 2), 'utf-8');
   await writeFile('output/errors.json', JSON.stringify(errors, null, 2), 'utf-8');
 
+  // --- Stage 5: run report ---
+  const endTime = new Date();
+  const report = {
+    start_time: startTime.toISOString(),
+    duration_ms: endTime - startTime,
+    pages_fetched: pagesFetched,
+    cache_hits: cacheHits,
+    valid_records: valid.length,
+    invalid_records: errors.length,
+    failed_pages: failedPages.length,
+    failures: failedPages,
+  };
+
+  await writeFile('output/run-report.json', JSON.stringify(report, null, 2), 'utf-8');
+
   console.log(`valid_records=${valid.length}`);
   console.log(`invalid_records=${errors.length}`);
+  console.log(`failed_pages=${failedPages.length}`);
 }
 
 main().catch((err) => {
