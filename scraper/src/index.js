@@ -2,6 +2,7 @@ import { writeFile, readFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import * as cheerio from 'cheerio';
+import { z } from 'zod';
 
 const USER_AGENT = 'FlyRankInternshipA9/1.0 (+https://github.com/farida-abdallah12/task-api-js)';
 const TIMEOUT_MS = 5000;
@@ -89,6 +90,32 @@ function extractBookDetails(html, bookUrl, sourcePage) {
   };
 }
 
+const BookSchema = z.object({
+  title: z.string().min(1),
+  product_url: z.string().url(),
+  price_text: z.string(),
+  price_gbp: z.number().positive(),
+  availability_text: z.string(),
+  rating_text: z.string(),
+  description: z.string().nullable(),
+  source_page: z.string().url(),
+  fetched_at: z.string(),
+});
+
+function cleanPrice(priceText) {
+  // "£51.77" -> 51.77
+  const numeric = priceText.replace(/[^0-9.]/g, '');
+  return parseFloat(numeric);
+}
+
+function normalizeRecord(raw) {
+  return {
+    ...raw,
+    price_gbp: cleanPrice(raw.price_text),
+  };
+}
+
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -100,6 +127,35 @@ function cacheFilenameForUrl(url) {
     .replace(/\/index\.html$/, '')
     .replace(/[^a-zA-Z0-9_-]/g, '_');
   return `book-${slug}.html`;
+}
+
+function validateRecords(rawRecords) {
+  const valid = [];
+  const errors = [];
+  const seenUrls = new Set();
+
+  for (const raw of rawRecords) {
+    const normalized = normalizeRecord(raw);
+
+    // canonical URL: same book seen twice counts once
+    if (seenUrls.has(normalized.product_url)) {
+      continue;
+    }
+
+    const result = BookSchema.safeParse(normalized);
+
+    if (result.success) {
+      valid.push(result.data);
+      seenUrls.add(normalized.product_url);
+    } else {
+      errors.push({
+        product_url: normalized.product_url,
+        reason: result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '),
+      });
+    }
+  }
+
+  return { valid, errors };
 }
 
 async function main() {
@@ -153,9 +209,14 @@ async function main() {
     }
   }
 
-  console.log(`detail_pages=${records.length}`);
-  console.log('Sample record:');
-  console.log(JSON.stringify(records[0], null, 2));
+  const { valid, errors } = validateRecords(records);
+
+  await mkdir('output', { recursive: true });
+  await writeFile('output/books.json', JSON.stringify(valid, null, 2), 'utf-8');
+  await writeFile('output/errors.json', JSON.stringify(errors, null, 2), 'utf-8');
+
+  console.log(`valid_records=${valid.length}`);
+  console.log(`invalid_records=${errors.length}`);
 }
 
 main().catch((err) => {
