@@ -10,6 +10,8 @@ const tasksRoutes = require('./routes/tasks.routes');
 const { errorHandler } = require('./middleware/error-handler');
 const authRoutes = require('./routes/auth.routes');
 
+const llmRoutes = require('./routes/llm.routes');
+
 function createApp() {
   const app = express();
 
@@ -24,9 +26,11 @@ function createApp() {
   app.use('/', metaRoutes);
   app.use('/', tasksRoutes);
   app.use('/', authRoutes);
+  app.use('/', llmRoutes);
 
   // One place that turns thrown errors into HTTP status codes. Must be last.
   app.use(errorHandler);
+
 
   return app;
 }

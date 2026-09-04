@@ -1,5 +1,4 @@
 {
-  "type": "module",
   "name": "internship-crud-api-layered",
   "version": "1.0.0",
   "description": "The Assignment 1 CRUD API, refactored into layers (routes -> service -> repository). Same behaviour, separated concerns.",
@@ -16,6 +15,7 @@
     "express": "^5.2.1",
     "openai": "^7.10.0",
     "pg": "^8.22.0",
-    "swagger-ui-express": "^5.0.1"
+    "swagger-ui-express": "^5.0.1",
+    "zod": "^4.5.4"
   }
 }
