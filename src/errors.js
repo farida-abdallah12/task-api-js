@@ -30,4 +30,25 @@ class UnprocessableError extends Error {
   }
 }
 
-module.exports = { NotFoundError, ValidationError, UnauthorizedError, UnprocessableError };
+class TimeoutError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'TimeoutError';
+  }
+}
+
+class ServiceDisabledError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ServiceDisabledError';
+  }
+}
+
+module.exports = {
+  NotFoundError,
+  ValidationError,
+  UnauthorizedError,
+  UnprocessableError,
+  TimeoutError,
+  ServiceDisabledError,
+};

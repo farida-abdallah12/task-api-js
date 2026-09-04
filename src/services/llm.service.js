@@ -1,13 +1,11 @@
 const fs = require('fs');
 const path = require('path');
-const { ValidationError, UnprocessableError } = require('../errors');
+const { ValidationError, UnprocessableError, ServiceDisabledError } = require('../errors');
 const { EnrichInputSchema, EnrichOutputSchema } = require('../llm/schema');
-const { callEnrichModel, callRepairModel } = require('../llm/enrich-client');
+const { callEnrichModel, callRepairModel, PROMPT_VERSION } = require('../llm/enrich-client');
 
-const PROMPT_VERSION = 'enrich-v1';
 const QUARANTINE_PATH = path.join(__dirname, '..', '..', 'logs', 'quarantine.jsonl');
 
-// A fixed, fake-but-valid answer — used only when LLM_STUB=1.
 function stubEnrichment() {
   const stub = {
     category: 'fiction',
@@ -17,16 +15,12 @@ function stubEnrichment() {
   return EnrichOutputSchema.parse(stub);
 }
 
-// Turns a Zod validation failure into a short, readable string —
-// used both in the repair prompt and in the quarantine log.
 function formatZodError(zodError) {
   return zodError.issues
     .map((issue) => `${issue.path.join('.')}: ${issue.message}`)
     .join('; ');
 }
 
-// Appends one line of failure detail to logs/quarantine.jsonl. Creates the
-// logs/ folder the first time this runs, since it isn't committed to Git.
 function writeToQuarantine(entry) {
   fs.mkdirSync(path.dirname(QUARANTINE_PATH), { recursive: true });
   fs.appendFileSync(QUARANTINE_PATH, JSON.stringify(entry) + '\n');
@@ -41,6 +35,12 @@ async function enrichBook(rawInput) {
 
   if (process.env.LLM_STUB === '1') {
     return stubEnrichment();
+  }
+
+  // Kill switch: skip the model entirely. Checked before any network call,
+  // so flipping this off truly means zero calls made, zero cost, zero risk.
+  if (process.env.LLM_ENABLED === 'false') {
+    throw new ServiceDisabledError('The enrichment feature is currently disabled.');
   }
 
   const bookRecord = inputParsed.data;
