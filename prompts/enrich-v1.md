@@ -15,6 +15,7 @@ Return ONLY a JSON object with exactly these fields:
 - Never return anything except the JSON object — no explanation, no markdown fences, no commentary.
 - Base the summary only on the information given. Do not invent plot details, authors, or facts not present in the input.
 
+
 ## When unsure
 If the book's genre is not clearly one of fiction, nonfiction, childrens, or academic, use "other" and include "needs_review" in quality_flags. Do not guess a specific category just to avoid using "other".
 

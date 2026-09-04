@@ -32,9 +32,8 @@ function extractJson(rawText) {
 }
 
 // Sends the validated book record to the model and returns whatever it
-// answers, parsed into an object if possible. This does NOT validate the
-// result against the output schema yet — that's Stage 3's job. Right now
-// we're just proving real answers come back in roughly the right shape.
+// answers, parsed into an object if possible. Does not validate against
+// the output schema — that happens one level up, in llm.service.js.
 async function callEnrichModel(bookRecord) {
   const response = await client.chat.completions.create({
     model: process.env.LLM_MODEL,
@@ -51,4 +50,29 @@ async function callEnrichModel(bookRecord) {
   return { rawText, parsed };
 }
 
-module.exports = { callEnrichModel };
+// The repair retry: gives the model its own broken answer plus the exact
+// validation error, and asks for a corrected version. Reuses the same
+// conversation so the model has full context — the original instructions,
+// the input it was given, what it answered, and why that answer was rejected.
+async function callRepairModel(bookRecord, brokenRawText, validationErrorMessage) {
+  const response = await client.chat.completions.create({
+    model: process.env.LLM_MODEL,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: JSON.stringify(bookRecord) },
+      { role: 'assistant', content: brokenRawText },
+      {
+        role: 'user',
+        content: `Your previous answer was rejected for this reason: ${validationErrorMessage}\nReturn only corrected JSON matching the schema. No explanation, no markdown fences.`,
+      },
+    ],
+  });
+
+  const rawText = response.choices[0].message.content;
+  const parsed = extractJson(rawText);
+
+  return { rawText, parsed };
+}
+
+module.exports = { callEnrichModel, callRepairModel };

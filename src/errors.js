@@ -16,11 +16,18 @@ class ValidationError extends Error {
   }
 }
 
-class UnauthorizedError extends Error {          // NEW
-  constructor(message) {                          // NEW
-    super(message);                                // NEW
-    this.name = 'UnauthorizedError';               // NEW
+class UnauthorizedError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UnauthorizedError';
   }
-}                                                   // NEW
+}
 
-module.exports = { NotFoundError, ValidationError, UnauthorizedError }; // UPDATED
+class UnprocessableError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UnprocessableError';
+  }
+}
+
+module.exports = { NotFoundError, ValidationError, UnauthorizedError, UnprocessableError };
